@@ -1,0 +1,6 @@
+# PAM configuration for hyprlock
+# Fingerprint first, password fallback after 10 seconds.
+
+auth       sufficient                    pam_fprintd.so       timeout=10
+
+auth        include     login

@@ -1,0 +1,34 @@
+# Community driver for Goodix 27c6:5f10, based on libfprint 1.94.100.
+# Source: https://github.com/Sbenazar/goodix-5f10-libfprint
+pkgname=libfprint-goodix5f10
+pkgver=1.94.100.r625c733
+pkgrel=1
+pkgdesc='libfprint with community Goodix 27c6:5f10 TLS driver'
+arch=(x86_64)
+url='https://github.com/Sbenazar/goodix-5f10-libfprint'
+license=(LGPL-2.1-or-later)
+depends=(libgcc glib2 glibc libgudev libgusb openssl pixman)
+makedepends=(glib2-devel gobject-introspection meson python-cairo python-gobject)
+checkdepends=(cairo umockdev)
+provides=(libfprint libfprint-2.so)
+conflicts=(libfprint)
+_commit=625c733837f05a24bcf81999b654b26ce5530313
+source=("git+https://github.com/Sbenazar/goodix-5f10-libfprint.git#commit=$_commit")
+sha256sums=(SKIP)
+
+build() {
+  arch-meson goodix-5f10-libfprint build \
+    -Dinstalled-tests=false -Ddoc=false -Dgtk-examples=false
+  meson compile -C build
+}
+
+check() {
+  # The egis_etu905 USB replay aborts in some umockdev sandboxes, and
+  # metainfo validation requires network access. Neither tests Goodix 5f10.
+  meson test -C build --print-errorlogs \
+    --no-suite drivers --exclude metainfo-validate
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+}
