@@ -1,6 +1,6 @@
 # Goodix 27c6:5f10 on Arch Linux
 
-在 Arch Linux 上启用 Goodix `27c6:5f10` 指纹传感器，并接入 `sudo` 与 `hyprlock`。本文记录一次实际安装与验证过程，包含失败路径、主要坑点和回退方式。
+在 Arch Linux 上启用 Goodix `27c6:5f10` 指纹传感器，并接入 `sudo`、`hyprlock` 与 `sddm` 登录。本文记录一次实际安装与验证过程，包含失败路径、主要坑点和回退方式。
 
 > 本仓库不包含设备 PSK、指纹模板、Windows 注册表文件或任何个人/主机信息。文中的磁盘、路径与用户名均为占位符。
 
@@ -12,8 +12,8 @@
 | 官方 `libfprint 1.94.100` | **不支持**该型号 |
 | 社区驱动 | `Sbenazar/goodix-5f10-libfprint` 可识别并完成录入、验证 |
 | 系统服务 | 使用官方 `fprintd 1.94.5` |
-| 登录界面 | `ly` 保持密码登录 |
-| `sudo` / `hyprlock` | 指纹优先，超时后回退密码 |
+| 登录界面 | **SDDM**，指纹登录实测成功（日志含 `Place your right index finger on the fingerprint reader` 与 `Authentication for user ... successful`） |
+| `sudo` / `hyprlock` / `sddm` | 指纹优先，超时后回退密码 |
 | PSK 来源 | 从本机 Windows 分区的 DPAPI 材料离线、只读恢复 |
 
 本机环境（用于实测，非要求）：
@@ -21,7 +21,7 @@
 ```text
 Arch Linux
 Linux 7.3.1-1-cachyos
-niri + ly + hyprlock
+niri + sddm + hyprlock
 ```
 
 ## 为什么官方驱动不行
@@ -224,7 +224,7 @@ Verify result: verify-match (done)
 
 如果出现 `enroll-completed`，表示录入阶段已经完成，不是仍在持续采集，也不是错误。
 
-## 接入 sudo 与锁屏
+## 接入 sudo、锁屏与 SDDM
 
 PAM 的认证栈是串行的，`pam_fprintd` 不能与密码输入同时监听。这里采用“指纹优先，10 秒超时后回退密码”。
 
@@ -233,6 +233,7 @@ PAM 的认证栈是串行的，`pam_fprintd` 不能与密码输入同时监听�
 ```sh
 sudo cp --preserve=all /etc/pam.d/sudo /etc/pam.d/sudo.pre-fprint
 sudo cp --preserve=all /etc/pam.d/hyprlock /etc/pam.d/hyprlock.pre-fprint
+sudo cp --preserve=all /etc/pam.d/sddm /etc/pam.d/sddm.pre-fprint
 ```
 
 在 `include` 语句之前插入：
@@ -269,13 +270,43 @@ sudo true
 
 触摸已录入的手指。匹配成功时不要求密码；不触摸时约 10 秒后出现密码提示。
 
-### 为什么没有接入 ly
+### 接入 SDDM 登录
 
-`ly` 的登录流程先收集用户名和密码，再启动 PAM 会话。其 PAM conversation 只处理 `PAM_PROMPT_ECHO_ON` / `PAM_PROMPT_ECHO_OFF`，无法在指纹等待期间接受新的密码输入，`PAM_ERROR_MSG` 也会中止会话。
+```sh
+sudo pacman -S --needed sddm
+```
 
-因此接入后可能出现“等待指纹期间无法改用密码”的体验问题。本机选择保留密码登录，不修改 `/etc/pam.d/ly`。
+在 `/etc/pam.d/sddm` 顶部插入同样的 `pam_fprintd` 行（完整文件见 [`pam/sddm.example`](pam/sddm.example)），然后切换显示管理器：
 
-GDM 等图形登录管理器会为密码和指纹分别启动认证栈，行为不同；本方案不适用。
+```sh
+sudo sed -i '1a auth       sufficient                    pam_fprintd.so       timeout=10' /etc/pam.d/sddm
+sudo systemctl disable 'ly@*'   # 若之前使用 ly
+sudo systemctl enable sddm.service
+```
+
+重启后生效。实测日志：
+
+```text
+SDDM::Auth::INFO_UNKNOWN "Place your right index finger on the fingerprint reader"
+Authentication for user "..." successful
+Starting Wayland user session: niri-session
+```
+
+注意：
+
+- 指纹登录不会把密码递给 gnome-keyring / KWallet，依赖密钥环的应用可能仍要求输入密码。
+- 指纹等待期间不能直接改用密码，需要等超时；这是 PAM 串行模型的限制。
+- GDM 51 起登录页不再提供指纹入口，本方案不适用于 GDM。
+
+### 从 ly 迁移时的注意点
+
+`ly` 的 PAM conversation 先收集用户名和密码，无法在指纹等待期间接受新的密码输入，不适合指纹登录。迁移到 SDDM 后，`ly` 可以卸载：
+
+```sh
+sudo pacman -Rns ly
+```
+
+但应先重启确认 SDDM 工作正常再卸载，否则当前运行中的 `ly` 进程在注销后仍会接管登录界面。
 
 ## 清理
 
@@ -299,6 +330,7 @@ sudo pacman -R libfprint-goodix5f10
 sudo pacman -S libfprint
 sudo cp --preserve=all /etc/pam.d/sudo.pre-fprint /etc/pam.d/sudo
 sudo cp --preserve=all /etc/pam.d/hyprlock.pre-fprint /etc/pam.d/hyprlock
+sudo cp --preserve=all /etc/pam.d/sddm.pre-fprint /etc/pam.d/sddm
 ```
 
 若要彻底移除指纹数据，先删除已录入指纹：
